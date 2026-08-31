@@ -25,6 +25,12 @@ const CalendarView = (() => {
     dragState = null;
     ds.onUp(e);
   });
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !dragState) return;
+    const ds = dragState;
+    dragState = null;
+    if (ds.onCancel) ds.onCancel();
+  });
 
   function init(handlers) {
     onTaskClick = handlers.onTaskClick || onTaskClick;
@@ -354,6 +360,9 @@ const CalendarView = (() => {
           if (m2 - m1 < SNAP_MIN) m2 = m1 + 60; // a plain click defaults to a 1-hour task
           ghost.remove();
           onSlotCreate(dateStr, minutesToTime(m1), minutesToTime(m2));
+        },
+        onCancel() {
+          ghost.remove();
         }
       };
     });
@@ -407,6 +416,9 @@ const CalendarView = (() => {
           if (activated && live) live.onUp(ev);
           // otherwise: this was a plain click. The native 'click' listener
           // above fires right after this and opens the task.
+        },
+        onCancel() {
+          if (activated && live && live.onCancel) live.onCancel();
         }
       };
     });
@@ -486,6 +498,11 @@ const CalendarView = (() => {
         Scheduler.placeTask(window.Store, task.id, targetCol.dataset.date, newStart, newEnd);
         onTaskMoved();
         render();
+      },
+      onCancel() {
+        ghost.remove();
+        badge.remove();
+        el.classList.remove('is-dragging-source');
       }
     };
   }
@@ -520,6 +537,11 @@ const CalendarView = (() => {
         Scheduler.placeTask(window.Store, task.id, task.date, task.startTime, newEnd);
         onTaskMoved();
         render();
+      },
+      onCancel() {
+        el.classList.remove('is-dragging');
+        el.style.height = `${startHeight}px`;
+        badge.remove();
       }
     };
   }
