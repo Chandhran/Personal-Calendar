@@ -176,6 +176,15 @@ const CalendarView = (() => {
     return h < 12 ? `${h} AM` : `${h - 12} PM`;
   }
 
+  function flashTask(taskId) {
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-task-id="${taskId}"]`);
+      if (!el) return;
+      el.classList.add('just-rescheduled');
+      setTimeout(() => el.classList.remove('just-rescheduled'), 900);
+    });
+  }
+
   function renderTimedTaskBlock(task) {
     const startMin = timeToMinutes(task.startTime);
     const endMin = timeToMinutes(task.endTime);
@@ -226,6 +235,7 @@ const CalendarView = (() => {
       window.Store.updateTask(task.id, { missed: true, completed: false });
       Scheduler.rescheduleMissed(window.Store, task.id, task.date);
       render();
+      flashTask(task.id);
     });
 
     el.appendChild(title);
