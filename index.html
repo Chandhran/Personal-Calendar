@@ -54,9 +54,13 @@
         <label>Date</label>
         <input type="date" id="modal-date">
       </div>
-      <div class="field-row">
+      <div class="field-row" id="modal-time-row">
         <label>Time</label>
         <input type="time" id="modal-start"> <span class="dash">–</span> <input type="time" id="modal-end">
+      </div>
+      <div class="field-row">
+        <label></label>
+        <label class="check-inline"><input type="checkbox" id="modal-overnight"> Overnight task — automated, no fixed time; always runs in the last hours of the day</label>
       </div>
       <div class="field-row">
         <label>Deadline</label>
@@ -129,6 +133,14 @@
       <div class="modal-foot" style="padding-left:0">
         <div class="spacer"></div>
         <button id="cfg-save" class="btn btn-primary">Save & sync</button>
+      </div>
+
+      <h3 class="section-title">Default working hours</h3>
+      <p class="hint">Used for every date that doesn't have its own override below. The rescheduler treats this as the normal daily window.</p>
+      <div class="field-row"><label>From</label><input type="time" id="dwh-start"> <span class="dash">–</span> <input type="time" id="dwh-end"></div>
+      <div class="modal-foot" style="padding-left:0">
+        <div class="spacer"></div>
+        <button id="dwh-save" class="btn btn-primary">Save default</button>
       </div>
 
       <h3 class="section-title">Working hours for a date</h3>
