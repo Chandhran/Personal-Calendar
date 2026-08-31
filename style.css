@@ -360,6 +360,7 @@ button, input, select {
   z-index: 100;
 }
 .modal-overlay.open { display: flex; }
+.modal-small { width: 380px; }
 .modal {
   background: var(--panel-solid);
   background-image: linear-gradient(160deg, rgba(91,140,255,.12), transparent 40%);

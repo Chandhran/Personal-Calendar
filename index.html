@@ -144,6 +144,23 @@
   </div>
 </div>
 
+<!-- Recurrence edit-scope modal -->
+<div id="scope-modal" class="modal-overlay">
+  <div class="modal modal-small">
+    <div class="modal-head">
+      <h2>Change this recurring task</h2>
+    </div>
+    <div class="modal-body">
+      <p class="hint" style="margin-bottom:14px">This task repeats. Should this change apply to just this occurrence, or to this and every one after it?</p>
+    </div>
+    <div class="modal-foot" style="flex-direction:column; align-items:stretch; gap:8px">
+      <button id="scope-this" class="btn btn-primary" style="width:100%">Just this occurrence</button>
+      <button id="scope-following" class="btn btn-ghost" style="width:100%">This and following occurrences</button>
+      <button id="scope-cancel" class="btn btn-ghost" style="width:100%">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <script src="js/model.js"></script>
 <script src="js/scheduler.js"></script>
 <script src="js/store.js"></script>
