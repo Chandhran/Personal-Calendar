@@ -8,7 +8,6 @@ const CalendarView = (() => {
   const HOUR_PX = 56;
   const SNAP_MIN = 15;
   const DAY_END_MIN = 24 * 60;
-  const CLICK_THRESHOLD_PX = 4;
 
   let view = 'week';           // 'day' | 'week' | 'month'
   let anchorDate = toDateStr(new Date());
@@ -157,6 +156,7 @@ const CalendarView = (() => {
       shade.style.height = `${((timeToMinutes(win.end) - timeToMinutes(win.start)) / 60) * HOUR_PX}px`;
       col.appendChild(shade);
 
+      col.style.height = `${(DAY_END_MIN / 60) * HOUR_PX}px`;
       attachSlotCreation(col, d);
 
       window.Store.getTasksOnDate(d).forEach(task => {
@@ -350,58 +350,62 @@ const CalendarView = (() => {
   }
 
   // ---------- Pointer interactions: move (floating ghost) / resize ----------
+  // Drag activation is deferred: mousedown alone never moves anything or
+  // opens a ghost. Only once the cursor has actually traveled past a small
+  // threshold does a real drag begin — otherwise the browser's native click
+  // event fires normally and opens the task for editing. This is what makes
+  // "click to open" and "drag to move" reliably distinguishable.
+  const DRAG_ACTIVATE_PX = 5;
+
   function snapMinutesFromPx(px) {
     return Math.max(0, Math.round((px / HOUR_PX) * 60 / SNAP_MIN) * SNAP_MIN);
   }
 
   function attachTaskPointer(el, task, handle) {
+    let suppressNextClick = false;
+
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.tick-btn') || e.target.closest('.x-btn')) return;
+      if (suppressNextClick) { suppressNextClick = false; return; }
+      onTaskClick(task.id);
+    });
+
     el.addEventListener('mousedown', (e) => {
       if (e.target.closest('.tick-btn') || e.target.closest('.x-btn')) return;
       const isResize = e.target === handle;
+      const startClientX = e.clientX;
+      const startClientY = e.clientY;
       e.preventDefault();
-      e.stopPropagation();
 
-      if (isResize) beginResize(e, el, task);
-      else beginMove(e, el, task);
+      let activated = false;
+      let live = null;
+
+      dragState = {
+        onMove(ev) {
+          if (!activated) {
+            const dist = Math.hypot(ev.clientX - startClientX, ev.clientY - startClientY);
+            if (dist < DRAG_ACTIVATE_PX) return;
+            activated = true;
+            suppressNextClick = true;
+            live = isResize
+              ? startResize(el, task, startClientY)
+              : startMove(el, task, startClientX, startClientY);
+          }
+          live.onMove(ev);
+        },
+        onUp(ev) {
+          if (activated && live) live.onUp(ev);
+          // otherwise: this was a plain click. The native 'click' listener
+          // above fires right after this and opens the task.
+        }
+      };
     });
   }
 
-  function beginResize(e, el, task) {
-    const startClientY = e.clientY;
-    const startHeight = parseFloat(el.style.height);
-    el.classList.add('is-dragging');
-
-    dragState = {
-      onMove(ev) {
-        const dy = ev.clientY - startClientY;
-        const rawHeight = Math.max(20, startHeight + dy);
-        const snappedMin = Math.max(SNAP_MIN, snapMinutesFromPx(rawHeight));
-        el.style.height = `${(snappedMin / 60) * HOUR_PX}px`;
-      },
-      onUp(ev) {
-        el.classList.remove('is-dragging');
-        const moved = Math.abs(ev.clientY - startClientY);
-        if (moved < CLICK_THRESHOLD_PX) {
-          onTaskClick(task.id);
-          return;
-        }
-        const heightPx = parseFloat(el.style.height);
-        const durMin = Math.max(SNAP_MIN, snapMinutesFromPx(heightPx));
-        const newEnd = minutesToTime(timeToMinutes(task.startTime) + durMin);
-        History.record();
-        Scheduler.placeTask(window.Store, task.id, task.date, task.startTime, newEnd);
-        onTaskMoved();
-        render();
-      }
-    };
-  }
-
-  function beginMove(e, el, task) {
+  function startMove(el, task, startClientX, startClientY) {
     const rect = el.getBoundingClientRect();
-    const grabOffsetX = e.clientX - rect.left;
-    const grabOffsetY = e.clientY - rect.top;
-    const startClientX = e.clientX;
-    const startClientY = e.clientY;
+    const grabOffsetX = startClientX - rect.left;
+    const grabOffsetY = startClientY - rect.top;
 
     const ghost = el.cloneNode(true);
     ghost.classList.add('drag-ghost-el');
@@ -415,11 +419,27 @@ const CalendarView = (() => {
     document.body.appendChild(ghost);
     el.classList.add('is-dragging-source');
 
+    // A prominent floating badge that follows the cursor and always shows
+    // the exact time the task will snap to if dropped right now.
+    const badge = document.createElement('div');
+    badge.className = 'drag-time-badge';
+    document.body.appendChild(badge);
+
     let lastTargetCol = el.parentElement;
-    const timeBadge = ghost.querySelector('.task-time');
     const dur = timeToMinutes(task.endTime) - timeToMinutes(task.startTime);
 
-    dragState = {
+    function updatePreview(ev, targetCol) {
+      const colRect = targetCol.getBoundingClientRect();
+      const relY = (ev.clientY - grabOffsetY) - colRect.top;
+      const snappedMin = snapMinutesFromPx(relY);
+      const label = `${minutesToTime(snappedMin)} – ${minutesToTime(snappedMin + dur)}`;
+      badge.textContent = label;
+      badge.style.left = `${ev.clientX + 16}px`;
+      badge.style.top = `${ev.clientY + 16}px`;
+      return snappedMin;
+    }
+
+    return {
       onMove(ev) {
         ghost.style.left = `${ev.clientX - grabOffsetX}px`;
         ghost.style.top = `${ev.clientY - grabOffsetY}px`;
@@ -428,21 +448,16 @@ const CalendarView = (() => {
         const targetCol = under && under.closest('.day-col');
         if (targetCol) {
           lastTargetCol = targetCol;
-          const colRect = targetCol.getBoundingClientRect();
-          const relY = (ev.clientY - grabOffsetY) - colRect.top;
-          const snappedMin = snapMinutesFromPx(relY);
-          if (timeBadge) timeBadge.textContent = `${minutesToTime(snappedMin)} – ${minutesToTime(snappedMin + dur)}`;
+          updatePreview(ev, targetCol);
+          badge.classList.remove('is-outside');
+        } else {
+          badge.classList.add('is-outside');
         }
       },
       onUp(ev) {
         ghost.remove();
+        badge.remove();
         el.classList.remove('is-dragging-source');
-
-        const moved = Math.hypot(ev.clientX - startClientX, ev.clientY - startClientY);
-        if (moved < CLICK_THRESHOLD_PX) {
-          onTaskClick(task.id);
-          return;
-        }
 
         const under = document.elementFromPoint(ev.clientX, ev.clientY);
         const targetCol = (under && under.closest('.day-col')) || lastTargetCol;
@@ -450,12 +465,49 @@ const CalendarView = (() => {
 
         const colRect = targetCol.getBoundingClientRect();
         const relY = (ev.clientY - grabOffsetY) - colRect.top;
+        // No clamping to the working-hours window here — manual drag can
+        // land anywhere the user drops it; only auto-reschedule respects
+        // the window.
         const snappedMin = snapMinutesFromPx(relY);
         const newStart = minutesToTime(snappedMin);
         const newEnd = minutesToTime(snappedMin + dur);
 
         History.record();
         Scheduler.placeTask(window.Store, task.id, targetCol.dataset.date, newStart, newEnd);
+        onTaskMoved();
+        render();
+      }
+    };
+  }
+
+  function startResize(el, task, startClientY) {
+    const startHeight = parseFloat(el.style.height);
+    el.classList.add('is-dragging');
+
+    const badge = document.createElement('div');
+    badge.className = 'drag-time-badge';
+    document.body.appendChild(badge);
+
+    return {
+      onMove(ev) {
+        const dy = ev.clientY - startClientY;
+        const rawHeight = Math.max(20, startHeight + dy);
+        const snappedMin = Math.max(SNAP_MIN, snapMinutesFromPx(rawHeight));
+        el.style.height = `${(snappedMin / 60) * HOUR_PX}px`;
+
+        const newEnd = minutesToTime(timeToMinutes(task.startTime) + snappedMin);
+        badge.textContent = `${task.startTime} – ${newEnd}`;
+        badge.style.left = `${ev.clientX + 16}px`;
+        badge.style.top = `${ev.clientY + 16}px`;
+      },
+      onUp() {
+        el.classList.remove('is-dragging');
+        badge.remove();
+        const heightPx = parseFloat(el.style.height);
+        const durMin = Math.max(SNAP_MIN, snapMinutesFromPx(heightPx));
+        const newEnd = minutesToTime(timeToMinutes(task.startTime) + durMin);
+        History.record();
+        Scheduler.placeTask(window.Store, task.id, task.date, task.startTime, newEnd);
         onTaskMoved();
         render();
       }

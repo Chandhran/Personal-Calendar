@@ -35,19 +35,45 @@ const Scheduler = (() => {
   // Core: lay out all tasks assigned to `dateStr` (array of task objects,
   // mutated in place: sets .date/.startTime/.endTime). Tasks that cannot fit
   // are returned in `overflow` for the caller to push to the next day.
-  function layoutDay(store, dateStr, tasksForDay) {
+  // `unboundedId`, if given, marks one task (the one the user just
+  // dragged/resized/typed a time for) as exempt from the working-hours
+  // window — manual placement always wins exactly where the user put it.
+  // Only the *other* tasks displaced around it stay bounded by the window.
+  function layoutDay(store, dateStr, tasksForDay, unboundedId) {
     const win = workingWindow(store, dateStr);
     const windowStart = timeToMinutes(win.start);
     const windowEnd = timeToMinutes(win.end);
 
-    const ranked = [...tasksForDay].sort(compareRank);
+    let rest = tasksForDay;
     const placed = [];
     const overflow = [];
 
+    if (unboundedId) {
+      const anchor = tasksForDay.find(t => t.id === unboundedId);
+      rest = tasksForDay.filter(t => t.id !== unboundedId);
+      if (anchor) {
+        const dur = durationMinutes(anchor);
+        const start = timeToMinutes(anchor.startTime); // exact — not clamped to the window
+        anchor._startMin = start;
+        anchor._endMin = start + dur;
+        anchor.date = dateStr;
+        placed.push(anchor);
+      }
+    }
+
+    const ranked = [...rest].sort(compareRank);
+
     for (const task of ranked) {
       const dur = durationMinutes(task);
-      const preferred = Math.max(timeToMinutes(task.startTime), windowStart);
-      const slot = findSlot(placed, preferred, windowEnd, dur);
+      // A task the user has manually placed at some point stays exempt from
+      // the working-hours window even on later reflows (e.g. when a new
+      // higher-rank task is dropped nearby and neighbors get re-laid-out) —
+      // only auto-scheduled tasks are bound by the window.
+      const isFree = !!task.manuallyPlaced;
+      const effStart = isFree ? 0 : windowStart;
+      const effEnd = isFree ? 24 * 60 : windowEnd;
+      const preferred = Math.max(timeToMinutes(task.startTime), effStart);
+      const slot = findSlot(placed, preferred, effEnd, dur);
       if (slot === null) {
         overflow.push(task);
         continue;
@@ -64,20 +90,23 @@ const Scheduler = (() => {
 
   // Cascade: place tasksForDay on dateStr; anything that overflows is carried
   // to dateStr+1 and merged with whatever is already anchored there, and so
-  // on, capped to avoid runaway loops.
-  function cascade(store, dateStr, tasksForDay) {
+  // on, capped to avoid runaway loops. `unboundedId` (if any) only applies on
+  // the first day — the anchor itself never overflows since it isn't bounded.
+  function cascade(store, dateStr, tasksForDay, unboundedId) {
     const touched = new Set();
     let currentDate = dateStr;
     let pending = tasksForDay;
     let hops = 0;
+    let firstPass = true;
     const allPlaced = [];
 
     while (pending.length && hops++ < 60) {
       const existing = store.getTasksOnDate(currentDate)
         .filter(t => !t.completed && !pending.some(p => p.id === t.id));
-      const { placed, overflow } = layoutDay(store, currentDate, [...existing, ...pending]);
+      const { placed, overflow } = layoutDay(store, currentDate, [...existing, ...pending], firstPass ? unboundedId : null);
       allPlaced.push(...placed);
       touched.add(currentDate);
+      firstPass = false;
       if (!overflow.length) break;
       pending = overflow;
       currentDate = addDays(currentDate, 1);
@@ -86,9 +115,11 @@ const Scheduler = (() => {
     return { touched: [...touched], placed: allPlaced, strandedCount: pending.length };
   }
 
-  // Public: user dropped/resized a task onto (dateStr, startTime, endTime).
-  // The moved task becomes the manual anchor; neighbors on that day reflow
-  // around it, with overflow cascading forward.
+  // Public: user dropped/resized/typed a time for a task onto (dateStr,
+  // startTime, endTime). This is manual placement — it lands exactly there,
+  // even outside the day's working-hours window. Neighbors on that day
+  // reflow around it (bounded by the window), with overflow cascading
+  // forward.
   function placeTask(store, taskId, dateStr, startTime, endTime) {
     const task = store.getTask(taskId);
     if (!task) return { touched: [] };
@@ -98,7 +129,7 @@ const Scheduler = (() => {
     task.manuallyPlaced = true;
 
     const others = store.getTasksOnDate(dateStr).filter(t => t.id !== taskId && !t.completed);
-    return cascade(store, dateStr, [task, ...others]);
+    return cascade(store, dateStr, [task, ...others], taskId);
   }
 
   // Public: user ticked "missed" on a task. Find it the next slot at/after
