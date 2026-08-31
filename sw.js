@@ -7,7 +7,7 @@
 const CACHE = 'blueprint-cache-v1';
 const ASSETS = [
   './', './index.html', './style.css',
-  './js/model.js', './js/scheduler.js', './js/store.js',
+  './js/model.js', './js/scheduler.js', './js/store.js', './js/history.js',
   './js/notifications.js', './js/calendar.js', './js/app.js',
   './manifest.json', './icons/icon.svg'
 ];
