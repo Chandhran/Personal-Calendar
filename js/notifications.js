@@ -57,6 +57,15 @@ const Notifier = (() => {
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(() => { /* non-fatal */ });
+      // As soon as a newly-deployed sw.js takes control of this page, reload
+      // once automatically so you always get the latest code without having
+      // to remember to hard-refresh.
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloading) return;
+        reloading = true;
+        window.location.reload();
+      });
     }
   }
 

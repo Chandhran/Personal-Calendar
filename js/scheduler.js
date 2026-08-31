@@ -132,12 +132,12 @@ const Scheduler = (() => {
     return cascade(store, dateStr, [task, ...others], taskId);
   }
 
-  // Public: user ticked "missed" on a task. Find it the next slot at/after
-  // now, per hierarchy, cascading forward through days as needed. If the
-  // task's original time has already passed today, it's bumped forward to
-  // "now" (rounded to the next 15 minutes) — otherwise, for an isolated task
-  // with nothing to reflow around, it would just land back in its own
-  // already-past slot and look like nothing happened.
+  // Public: user ticked "missed" on a task. Marking something "not done" is
+  // an action taken right now, so the task always gets re-anchored from the
+  // current moment forward on today's date — not just when its original
+  // time has technically already passed. (For a task on a different date,
+  // there's no "now" on that date to anchor to, so it reflows using its own
+  // time as the starting preference instead.)
   function rescheduleMissed(store, taskId, fromDate) {
     const task = store.getTask(taskId);
     if (!task) return { touched: [] };
@@ -149,14 +149,11 @@ const Scheduler = (() => {
     if (fromDate === todayStr) {
       const now = new Date();
       const nowMin = now.getHours() * 60 + now.getMinutes();
-      const roundedNow = Math.ceil(nowMin / 15) * 15;
-      if (roundedNow > timeToMinutes(task.startTime)) {
-        task.startTime = minutesToTime(roundedNow);
-      }
+      task.startTime = minutesToTime(Math.ceil(nowMin / 15) * 15);
     }
     task.date = fromDate;
-    // keep (possibly bumped) startTime as "preference" for that day's slot
-    // search; layoutDay will push it forward further if occupied by
+    // keep (possibly re-anchored) startTime as "preference" for that day's
+    // slot search; layoutDay will push it forward further if occupied by
     // higher-rank tasks.
     task.endTime = minutesToTime(timeToMinutes(task.startTime) + dur);
 

@@ -224,6 +224,14 @@
     $('#task-modal').addEventListener('click', (e) => { if (e.target.id === 'task-modal') closeTaskModal(); });
   }
 
+  function wireEscapeToClose() {
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if ($('#task-modal').classList.contains('open')) closeTaskModal();
+      else if ($('#settings-modal').classList.contains('open')) closeSettings();
+    });
+  }
+
   function wireSettingsModal() {
     $('#settings-close').addEventListener('click', closeSettings);
     $('#cfg-save').addEventListener('click', saveGithubConfig);
@@ -236,6 +244,7 @@
     wireHeader();
     wireTaskModal();
     wireSettingsModal();
+    wireEscapeToClose();
 
     CalendarView.init({
       onTaskClick: (id) => openTaskModal({ id }),
