@@ -14,7 +14,7 @@ const Scheduler = (() => {
   function workingWindow(store, dateStr) {
     const override = store.getWorkingHours(dateStr);
     if (override) return override;
-    return { start: '09:00', end: '21:00' };
+    return store.getDefaultWorkingHours ? store.getDefaultWorkingHours() : { start: '09:00', end: '21:00' };
   }
 
   // Attempt to place `task` (with its own preferred/duration) into `placed`
@@ -61,7 +61,9 @@ const Scheduler = (() => {
       }
     }
 
-    const ranked = [...rest].sort(compareRank);
+    const overnightTasks = rest.filter(t => t.overnight);
+    const normalTasks = rest.filter(t => !t.overnight);
+    const ranked = [...normalTasks].sort(compareRank);
 
     for (const task of ranked) {
       const dur = durationMinutes(task);
@@ -80,6 +82,27 @@ const Scheduler = (() => {
       }
       const preferred = Math.max(timeToMinutes(task.startTime), effStart);
       const slot = findSlot(placed, preferred, effEnd, dur);
+      if (slot === null) {
+        overflow.push(task);
+        continue;
+      }
+      task._startMin = slot;
+      task._endMin = slot + dur;
+      task.date = dateStr;
+      task.startTime = minutesToTime(slot);
+      task.endTime = minutesToTime(slot + dur);
+      placed.push(task);
+    }
+
+    // Overnight tasks: automated, "just hit run" jobs with no real closing
+    // time — always placed sequentially in the last hours of the day, after
+    // everything else, independent of priority/deadline ranking against
+    // normal tasks (they simply always go last).
+    const overnightWindowStart = timeToMinutes(window.Model.OVERNIGHT_WINDOW_START);
+    const ovRanked = [...overnightTasks].sort(compareRank);
+    for (const task of ovRanked) {
+      const dur = durationMinutes(task) || window.Model.OVERNIGHT_DURATION_MIN;
+      const slot = findSlot(placed, overnightWindowStart, 24 * 60, dur);
       if (slot === null) {
         overflow.push(task);
         continue;
@@ -114,10 +137,10 @@ const Scheduler = (() => {
         // window fails identically on every subsequent day forever.
         const win = workingWindow(store, currentDate);
         for (const t of pending) {
-          if (!t.manuallyPlaced) {
+          if (!t.manuallyPlaced && !t.overnight) {
             const dur = durationMinutes(t);
             t.startTime = win.start;
-            t.endTime = minutesToTime(timeToMinutes(win.start) + dur);
+            t.endTime = window.Model.addMinutesCapped(win.start, dur) || win.start;
           }
         }
       }
@@ -157,12 +180,21 @@ const Scheduler = (() => {
   // current moment forward on today's date — not just when its original
   // time has technically already passed. (For a task on a different date,
   // there's no "now" on that date to anchor to, so it reflows using its own
-  // time as the starting preference instead.)
+  // time as the starting preference instead.) Overnight tasks skip all of
+  // this — they always just go back to the last hours of the day via
+  // layoutDay's overnight placement, regardless of "now".
   function rescheduleMissed(store, taskId, fromDate) {
     const task = store.getTask(taskId);
     if (!task) return { touched: [] };
     task.missed = false; // clears once rescheduled — it's been handled
     task.manuallyPlaced = false;
+
+    if (task.overnight) {
+      task.date = fromDate;
+      const others = store.getTasksOnDate(fromDate).filter(t => t.id !== taskId && !t.completed);
+      return cascade(store, fromDate, [task, ...others]);
+    }
+
     const dur = durationMinutes(task);
 
     const todayStr = toDateStr(new Date());
@@ -172,16 +204,38 @@ const Scheduler = (() => {
       task.startTime = minutesToTime(Math.ceil(nowMin / 15) * 15);
     }
     task.date = fromDate;
-    // keep (possibly re-anchored) startTime as "preference" for that day's
-    // slot search; layoutDay will push it forward further if occupied by
-    // higher-rank tasks.
-    task.endTime = minutesToTime(timeToMinutes(task.startTime) + dur);
 
-    const others = store.getTasksOnDate(fromDate).filter(t => t.id !== taskId && !t.completed);
-    return cascade(store, fromDate, [task, ...others]);
+    let endTime = window.Model.addMinutesCapped(task.startTime, dur);
+    if (endTime === null) {
+      // Doesn't fit today at all — it would run past midnight. Jump
+      // straight to tomorrow's working-hours start rather than ever
+      // storing a wrapped, inside-out end time (which silently produces a
+      // negative duration and defeats every overflow check downstream).
+      task.date = addDays(fromDate, 1);
+      const win = workingWindow(store, task.date);
+      task.startTime = win.start;
+      endTime = window.Model.addMinutesCapped(task.startTime, dur) || win.start;
+    }
+    task.endTime = endTime;
+
+    const others = store.getTasksOnDate(task.date).filter(t => t.id !== taskId && !t.completed);
+    return cascade(store, task.date, [task, ...others]);
   }
 
-  return { layoutDay, cascade, placeTask, rescheduleMissed, workingWindow };
+  // Public: place a newly-created (or re-flagged) overnight task onto
+  // dateStr. It always lands in the last hours of that day, stacked
+  // sequentially with any other overnight tasks already there.
+  function placeOvernightTask(store, taskId, dateStr) {
+    const task = store.getTask(taskId);
+    if (!task) return { touched: [] };
+    task.manuallyPlaced = false;
+    task.overnight = true;
+    task.date = dateStr;
+    const others = store.getTasksOnDate(dateStr).filter(t => t.id !== taskId && !t.completed);
+    return cascade(store, dateStr, [task, ...others]);
+  }
+
+  return { layoutDay, cascade, placeTask, rescheduleMissed, placeOvernightTask, workingWindow };
 })();
 
 window.Scheduler = Scheduler;

@@ -18,11 +18,17 @@
     $('#modal-deadline').value = t.deadline || '';
     $('#modal-priority').value = t.priority;
     $('#modal-recurrence').value = (t.recurrence && t.recurrence.type) || 'none';
+    $('#modal-overnight').checked = !!t.overnight;
+    toggleOvernightUI(!!t.overnight);
     renderWeekdayPicker(t.recurrence);
     renderNotifChecks(t.notifications || [30]);
     $('#modal-delete').style.display = editingId ? 'inline-flex' : 'none';
     $('#task-modal').classList.add('open');
     $('#modal-title-input').focus();
+  }
+
+  function toggleOvernightUI(isOvernight) {
+    $('#modal-time-row').style.display = isOvernight ? 'none' : '';
   }
 
   function closeTaskModal() {
@@ -97,6 +103,7 @@
   function saveFromModal() {
     const title = $('#modal-title-input').value.trim() || 'Untitled task';
     const date = $('#modal-date').value;
+    const overnight = $('#modal-overnight').checked;
     const startTime = $('#modal-start').value;
     const endTime = $('#modal-end').value;
     const deadline = $('#modal-deadline').value || null;
@@ -104,7 +111,7 @@
     const recType = $('#modal-recurrence').value;
     const notifications = collectNotifs();
 
-    if (endTime <= startTime) {
+    if (!overnight && endTime <= startTime) {
       alert('End time must be after start time.');
       return;
     }
@@ -122,26 +129,28 @@
       History.record();
       if (editingId) {
         if (scope === 'following') {
-          const edits = { title, startTime, endTime, deadline, priority, notifications };
+          const edits = { title, startTime, endTime, deadline, priority, notifications, overnight };
           const newMaster = window.Store.splitSeriesFrom(editingId, edits);
           if (newMaster) {
             const [rs, re] = CalendarView.rangeForView();
             window.Store.ensureRecurringInstances(rs, re);
           }
         } else {
-          window.Store.updateTask(editingId, { title, date, startTime, endTime, deadline, priority, notifications });
-          Scheduler.placeTask(window.Store, editingId, date, startTime, endTime);
+          window.Store.updateTask(editingId, { title, date, startTime, endTime, deadline, priority, notifications, overnight });
+          if (overnight) Scheduler.placeOvernightTask(window.Store, editingId, date);
+          else Scheduler.placeTask(window.Store, editingId, date, startTime, endTime);
         }
       } else if (recType !== 'none') {
         const recurrenceId = uid();
-        const master = newTask({ title, date, startTime, endTime, deadline, priority, notifications, recurrence, recurrenceId });
+        const master = newTask({ title, date, startTime, endTime, deadline, priority, notifications, overnight, recurrence, recurrenceId });
         window.Store.addMaster(master);
         const [rs, re] = CalendarView.rangeForView();
         window.Store.ensureRecurringInstances(rs, re);
       } else {
-        const task = newTask({ title, date, startTime, endTime, deadline, priority, notifications });
+        const task = newTask({ title, date, startTime, endTime, deadline, priority, notifications, overnight });
         window.Store.addTask(task);
-        Scheduler.placeTask(window.Store, task.id, date, startTime, endTime);
+        if (overnight) Scheduler.placeOvernightTask(window.Store, task.id, date);
+        else Scheduler.placeTask(window.Store, task.id, date, startTime, endTime);
       }
       closeTaskModal();
       CalendarView.render();
@@ -178,15 +187,28 @@
     $('#cfg-token').value = '';
     $('#cfg-token').placeholder = cfg.token ? 'Token saved (leave blank to keep)' : 'ghp_...';
 
+    const defaults = window.Store.getDefaultWorkingHours();
+    $('#dwh-start').value = defaults.start;
+    $('#dwh-end').value = defaults.end;
+
     const anchor = CalendarView.getAnchor();
     const win = window.Store.getWorkingHours(anchor);
     $('#wh-date').value = anchor;
-    $('#wh-start').value = win ? win.start : '09:00';
-    $('#wh-end').value = win ? win.end : '21:00';
+    $('#wh-start').value = win ? win.start : defaults.start;
+    $('#wh-end').value = win ? win.end : defaults.end;
 
     $('#settings-modal').classList.add('open');
   }
   function closeSettings() { $('#settings-modal').classList.remove('open'); }
+
+  function saveDefaultWorkingHours() {
+    const start = $('#dwh-start').value;
+    const end = $('#dwh-end').value;
+    if (!start || !end || end <= start) { alert('End time must be after start time.'); return; }
+    History.record();
+    window.Store.setDefaultWorkingHours({ start, end });
+    CalendarView.render();
+  }
 
   function saveGithubConfig() {
     const token = $('#cfg-token').value.trim();
@@ -258,6 +280,7 @@
     $('#modal-save').addEventListener('click', saveFromModal);
     $('#modal-delete').addEventListener('click', deleteFromModal);
     $('#modal-recurrence').addEventListener('change', () => renderWeekdayPicker(null));
+    $('#modal-overnight').addEventListener('change', (e) => toggleOvernightUI(e.target.checked));
     $('#task-modal').addEventListener('click', (e) => { if (e.target.id === 'task-modal') closeTaskModal(); });
   }
 
@@ -272,6 +295,7 @@
   function wireSettingsModal() {
     $('#settings-close').addEventListener('click', closeSettings);
     $('#cfg-save').addEventListener('click', saveGithubConfig);
+    $('#dwh-save').addEventListener('click', saveDefaultWorkingHours);
     $('#wh-save').addEventListener('click', saveWorkingHours);
     $('#wh-clear').addEventListener('click', clearWorkingHours);
     $('#settings-modal').addEventListener('click', (e) => { if (e.target.id === 'settings-modal') closeSettings(); });

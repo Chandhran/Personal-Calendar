@@ -200,7 +200,8 @@ const CalendarView = (() => {
       priorityClass(task),
       task.deadline ? 'has-deadline' : '',
       task.missed ? 'is-missed' : '',
-      task.completed ? 'is-completed' : ''
+      task.completed ? 'is-completed' : '',
+      task.overnight ? 'is-overnight' : ''
     ].filter(Boolean).join(' ');
     el.style.top = `${(startMin / 60) * HOUR_PX}px`;
     el.style.height = `${Math.max(22, ((endMin - startMin) / 60) * HOUR_PX)}px`;
@@ -255,11 +256,19 @@ const CalendarView = (() => {
     el.appendChild(time);
     el.appendChild(actions);
 
-    const handle = document.createElement('div');
-    handle.className = 'resize-handle';
-    el.appendChild(handle);
-
-    attachTaskPointer(el, task, handle);
+    if (task.overnight) {
+      // Automated, no fixed time — always auto-placed by the scheduler, so
+      // dragging/resizing don't apply. Still clickable to edit details.
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.tick-btn') || e.target.closest('.x-btn')) return;
+        onTaskClick(task.id);
+      });
+    } else {
+      const handle = document.createElement('div');
+      handle.className = 'resize-handle';
+      el.appendChild(handle);
+      attachTaskPointer(el, task, handle);
+    }
 
     return el;
   }
@@ -469,10 +478,17 @@ const CalendarView = (() => {
     let lastTargetCol = el.parentElement;
     const dur = timeToMinutes(task.endTime) - timeToMinutes(task.startTime);
 
+    // Keep the full duration on the same calendar day — if the drop point
+    // would push the end past midnight, slide the start earlier so it still
+    // fits, rather than ever computing a wrapped end time.
+    function clampStart(snappedMin) {
+      return Math.min(snappedMin, Math.max(0, 24 * 60 - dur));
+    }
+
     function updatePreview(ev, targetCol) {
       const colRect = targetCol.getBoundingClientRect();
       const relY = (ev.clientY - grabOffsetY) - colRect.top;
-      const snappedMin = snapMinutesFromPx(relY);
+      const snappedMin = clampStart(snapMinutesFromPx(relY));
       const label = `${minutesToTime(snappedMin)} – ${minutesToTime(snappedMin + dur)}`;
       badge.textContent = label;
       badge.style.left = `${ev.clientX + 16}px`;
@@ -508,8 +524,8 @@ const CalendarView = (() => {
         const relY = (ev.clientY - grabOffsetY) - colRect.top;
         // No clamping to the working-hours window here — manual drag can
         // land anywhere the user drops it; only auto-reschedule respects
-        // the window.
-        const snappedMin = snapMinutesFromPx(relY);
+        // the window. It IS clamped to stay within the same calendar day.
+        const snappedMin = clampStart(snapMinutesFromPx(relY));
         const newStart = minutesToTime(snappedMin);
         const newEnd = minutesToTime(snappedMin + dur);
         const targetDate = targetCol.dataset.date;
@@ -542,6 +558,7 @@ const CalendarView = (() => {
   function startResize(el, task, startClientY) {
     const startHeight = parseFloat(el.style.height);
     el.classList.add('is-dragging');
+    const maxDurMin = Math.max(SNAP_MIN, 24 * 60 - timeToMinutes(task.startTime)); // never past midnight
 
     const badge = document.createElement('div');
     badge.className = 'drag-time-badge';
@@ -551,7 +568,7 @@ const CalendarView = (() => {
       onMove(ev) {
         const dy = ev.clientY - startClientY;
         const rawHeight = Math.max(20, startHeight + dy);
-        const snappedMin = Math.max(SNAP_MIN, snapMinutesFromPx(rawHeight));
+        const snappedMin = Math.min(maxDurMin, Math.max(SNAP_MIN, snapMinutesFromPx(rawHeight)));
         el.style.height = `${(snappedMin / 60) * HOUR_PX}px`;
 
         const newEnd = minutesToTime(timeToMinutes(task.startTime) + snappedMin);
@@ -563,7 +580,7 @@ const CalendarView = (() => {
         el.classList.remove('is-dragging');
         badge.remove();
         const heightPx = parseFloat(el.style.height);
-        const durMin = Math.max(SNAP_MIN, snapMinutesFromPx(heightPx));
+        const durMin = Math.min(maxDurMin, Math.max(SNAP_MIN, snapMinutesFromPx(heightPx)));
         const newEnd = minutesToTime(timeToMinutes(task.startTime) + durMin);
 
         window.promptRecurrenceScope(task, (scope) => {

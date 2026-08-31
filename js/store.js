@@ -8,7 +8,8 @@ const Store = (() => {
   let state = {
     tasks: [],            // flattened concrete instances (recurring masters expanded lazily)
     masters: [],          // recurring task templates
-    workingHours: {},     // dateStr -> {start, end}
+    workingHours: {},     // dateStr -> {start, end} per-date overrides
+    defaultWorkingHours: { start: '09:00', end: '21:00' }, // global default when no override exists
     meta: { sha: null }   // last known GitHub file sha, for safe commits
   };
 
@@ -19,7 +20,7 @@ const Store = (() => {
   function loadLocal() {
     try {
       const raw = localStorage.getItem(LS_KEY);
-      if (raw) state = JSON.parse(raw);
+      if (raw) state = { ...state, ...JSON.parse(raw) };
     } catch (e) { /* ignore corrupt cache */ }
     try {
       const rawCfg = localStorage.getItem(LS_CFG);
@@ -82,7 +83,11 @@ const Store = (() => {
       const json = await res.json();
       const content = decodeURIComponent(escape(atob(json.content.replace(/\n/g, ''))));
       const remote = JSON.parse(content);
-      state = { tasks: remote.tasks || [], masters: remote.masters || [], workingHours: remote.workingHours || {}, meta: { sha: json.sha } };
+      state = {
+        tasks: remote.tasks || [], masters: remote.masters || [], workingHours: remote.workingHours || {},
+        defaultWorkingHours: remote.defaultWorkingHours || { start: '09:00', end: '21:00' },
+        meta: { sha: json.sha }
+      };
       saveLocal();
       return { ok: true };
     } catch (e) {
@@ -93,7 +98,7 @@ const Store = (() => {
   async function syncToGitHub() {
     if (!isConfigured() || !dirty) return { ok: false, reason: dirty ? 'not_configured' : 'nothing_to_sync' };
     try {
-      const payload = { tasks: state.tasks, masters: state.masters, workingHours: state.workingHours };
+      const payload = { tasks: state.tasks, masters: state.masters, workingHours: state.workingHours, defaultWorkingHours: state.defaultWorkingHours };
       const content = btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2))));
       const body = {
         message: `Update schedule — ${new Date().toISOString()}`,
@@ -164,8 +169,16 @@ const Store = (() => {
   function getWorkingHours(dateStr) {
     return state.workingHours[dateStr] || null;
   }
+  function setDefaultWorkingHours(win) {
+    state.defaultWorkingHours = win;
+    markDirty();
+  }
+  function getDefaultWorkingHours() {
+    return state.defaultWorkingHours || { start: '09:00', end: '21:00' };
+  }
 
   function ensureRecurringInstances(rangeStart, rangeEnd) {
+    const storeAdapter = { getTask, getTasksOnDate, getWorkingHours, getDefaultWorkingHours, markDirty };
     for (const master of state.masters) {
       const dates = window.Model.expandRecurrence(master, rangeStart, rangeEnd);
       for (const d of dates) {
@@ -178,7 +191,7 @@ const Store = (() => {
         const already = state.tasks.some(t => t.recurrenceId === master.recurrenceId && (t.originalDate || t.date) === d);
         if (!already) {
           const dur = window.Model.durationMinutes(master);
-          state.tasks.push(window.Model.newTask({
+          const instance = window.Model.newTask({
             ...master,
             id: window.Model.uid(),
             date: d,
@@ -186,7 +199,14 @@ const Store = (() => {
             endTime: window.Model.minutesToTime(window.Model.timeToMinutes(master.startTime) + dur),
             recurrence: { type: 'none' }, // instances themselves don't recurse
             recurrenceId: master.recurrenceId
-          }));
+          });
+          state.tasks.push(instance);
+          if (instance.overnight) {
+            // Route through the real overnight placement logic rather than
+            // just copying the master's raw time — it needs to land in the
+            // last hours of THIS day, stacked with anything already there.
+            Scheduler.placeOvernightTask(storeAdapter, instance.id, d);
+          }
         }
       }
     }
@@ -229,12 +249,13 @@ const Store = (() => {
 
   // --- undo support ---
   function getSnapshot() {
-    return JSON.parse(JSON.stringify({ tasks: state.tasks, masters: state.masters, workingHours: state.workingHours }));
+    return JSON.parse(JSON.stringify({ tasks: state.tasks, masters: state.masters, workingHours: state.workingHours, defaultWorkingHours: state.defaultWorkingHours }));
   }
   function restoreSnapshot(snap) {
     state.tasks = snap.tasks;
     state.masters = snap.masters;
     state.workingHours = snap.workingHours;
+    state.defaultWorkingHours = snap.defaultWorkingHours || { start: '09:00', end: '21:00' };
     markDirty();
   }
 
@@ -245,7 +266,7 @@ const Store = (() => {
     pullFromGitHub, syncToGitHub, scheduleSync,
     getTask, getTasksOnDate, getTasksInRange,
     addTask, addMaster, getMasters, updateTask, removeTask, removeSeries,
-    setWorkingHours, getWorkingHours,
+    setWorkingHours, getWorkingHours, setDefaultWorkingHours, getDefaultWorkingHours,
     ensureRecurringInstances, splitSeriesFrom,
     getSnapshot, restoreSnapshot,
     markDirty

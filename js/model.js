@@ -54,9 +54,24 @@ function durationMinutes(task) {
   return timeToMinutes(task.endTime) - timeToMinutes(task.startTime);
 }
 
+// Adds `dur` minutes to a same-day startTime WITHOUT wrapping past midnight.
+// This app has no concept of a task spanning two calendar days, so a result
+// past 24:00 must never be silently wrapped into an earlier clock time (that
+// makes durationMinutes go negative and defeats every overflow check).
+// Returns null when it doesn't fit today at all — the caller should treat
+// that as "this needs to start on a different day."
+function addMinutesCapped(startTime, dur) {
+  const total = timeToMinutes(startTime) + dur;
+  if (total > 24 * 60) return null;
+  return minutesToTime(total);
+}
+
+const OVERNIGHT_WINDOW_START = '22:00';
+const OVERNIGHT_DURATION_MIN = 15; // nominal — overnight tasks have no real closing time
+
 // Blank task factory
 function newTask(overrides = {}) {
-  return {
+  const task = {
     id: uid(),
     title: '',
     date: toDateStr(new Date()),
@@ -69,11 +84,20 @@ function newTask(overrides = {}) {
     missed: false,
     completed: false,
     manuallyPlaced: false, // true once user drags it; scheduler treats as anchor
+    overnight: false,      // automated/"just hit run" task — no fixed closing
+                            // time, always auto-placed in the last hours of the day
     notifications: [30],
     notified: {},          // { leadMinutes: true } — fired-flag per instance
     createdAt: Date.now(),
     ...overrides
   };
+  // Overnight tasks always carry a short nominal duration regardless of
+  // whatever start/end came in — they have no real closing time, and the
+  // scheduler always repositions them into the last hours of the day anyway.
+  if (task.overnight) {
+    task.endTime = addMinutesCapped(task.startTime, OVERNIGHT_DURATION_MIN) || minutesToTime((timeToMinutes(task.startTime) + OVERNIGHT_DURATION_MIN) % (24 * 60));
+  }
+  return task;
 }
 
 // Rank tuple: lower sorts first (= higher scheduling priority)
@@ -179,7 +203,8 @@ function expandRecurrence(master, rangeStart, rangeEnd) {
 
 window.Model = {
   PRIORITY_ORDER, PRIORITY_LABEL, PRIORITY_RANK, NOTIF_OPTIONS,
+  OVERNIGHT_WINDOW_START, OVERNIGHT_DURATION_MIN,
   uid, pad2, toDateStr, fromDateStr, addDays,
-  timeToMinutes, minutesToTime, durationMinutes,
+  timeToMinutes, minutesToTime, durationMinutes, addMinutesCapped,
   newTask, rankOf, compareRank, expandRecurrence
 };
