@@ -71,7 +71,13 @@ const Scheduler = (() => {
       // only auto-scheduled tasks are bound by the window.
       const isFree = !!task.manuallyPlaced;
       const effStart = isFree ? 0 : windowStart;
-      const effEnd = isFree ? 24 * 60 : windowEnd;
+      let effEnd = isFree ? 24 * 60 : windowEnd;
+      // A task longer than the window itself can never fit inside it on any
+      // day — exempt it from the window-end check so it doesn't loop
+      // forever failing identically on every subsequent day.
+      if (!isFree && dur > (windowEnd - windowStart)) {
+        effEnd = 24 * 60;
+      }
       const preferred = Math.max(timeToMinutes(task.startTime), effStart);
       const slot = findSlot(placed, preferred, effEnd, dur);
       if (slot === null) {
@@ -101,6 +107,20 @@ const Scheduler = (() => {
     const allPlaced = [];
 
     while (pending.length && hops++ < 60) {
+      if (!firstPass) {
+        // A task rolling into a fresh day retries from THAT day's own
+        // working-hours start, not the clock time that already failed to
+        // fit on the previous day — otherwise a task that misses one day's
+        // window fails identically on every subsequent day forever.
+        const win = workingWindow(store, currentDate);
+        for (const t of pending) {
+          if (!t.manuallyPlaced) {
+            const dur = durationMinutes(t);
+            t.startTime = win.start;
+            t.endTime = minutesToTime(timeToMinutes(win.start) + dur);
+          }
+        }
+      }
       const existing = store.getTasksOnDate(currentDate)
         .filter(t => !t.completed && !pending.some(p => p.id === t.id));
       const { placed, overflow } = layoutDay(store, currentDate, [...existing, ...pending], firstPass ? unboundedId : null);
