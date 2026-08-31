@@ -3,8 +3,13 @@
 // browser is fully closed — that requires a push server, which a static
 // GitHub Pages site does not have. Notifications fire while this app is
 // open (foreground or backgrounded tab / installed window).
+//
+// Strategy: network-first for app files, falling back to cache only when
+// offline. This means updates you push to GitHub reach the browser on the
+// next load instead of being masked by a stale cache. Bump CACHE below any
+// time you want to force every installed client to drop old cached files.
 
-const CACHE = 'blueprint-cache-v1';
+const CACHE = 'blueprint-cache-v2';
 const ASSETS = [
   './', './index.html', './style.css',
   './js/model.js', './js/scheduler.js', './js/store.js', './js/history.js',
@@ -26,6 +31,12 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).catch(() => cached))
+    fetch(e.request)
+      .then(res => {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put(e.request, copy));
+        return res;
+      })
+      .catch(() => caches.match(e.request))
   );
 });
