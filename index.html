@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blueprint — Schedule</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#0E1A24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img src="icons/icon.svg" class="brand-mark" alt="">
+    <span class="brand-name">Blueprint</span>
+  </div>
+
+  <div class="nav-controls">
+    <button id="btn-today" class="btn btn-ghost">Today</button>
+    <button id="btn-prev" class="btn btn-icon" aria-label="Previous">‹</button>
+    <button id="btn-next" class="btn btn-icon" aria-label="Next">›</button>
+    <h1 id="range-label" class="range-label"></h1>
+  </div>
+
+  <div class="right-controls">
+    <span id="sync-status" class="sync-status sync-off">Local only</span>
+    <select id="view-select" class="view-select">
+      <option value="day">Day</option>
+      <option value="week" selected>Week</option>
+      <option value="month">Month</option>
+    </select>
+    <button id="btn-add-task" class="btn btn-primary">+ New task</button>
+    <button id="btn-settings" class="btn btn-icon" aria-label="Settings" title="Settings">⚙</button>
+  </div>
+</header>
+
+<main id="calendar-root" class="calendar-root"></main>
+
+<!-- Task modal -->
+<div id="task-modal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-head">
+      <input id="modal-title-input" class="modal-title-input" placeholder="Add title" />
+      <button id="modal-close" class="btn btn-icon">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="field-row">
+        <label>Date</label>
+        <input type="date" id="modal-date">
+      </div>
+      <div class="field-row">
+        <label>Time</label>
+        <input type="time" id="modal-start"> <span class="dash">–</span> <input type="time" id="modal-end">
+      </div>
+      <div class="field-row">
+        <label>Deadline</label>
+        <input type="date" id="modal-deadline">
+        <span class="hint">A deadline outranks priority when the schedule reorganizes itself.</span>
+      </div>
+      <div class="field-row">
+        <label>Priority</label>
+        <select id="modal-priority">
+          <option value="urgent">Urgent</option>
+          <option value="immediate">Immediate</option>
+          <option value="not_urgent">Not urgent</option>
+          <option value="long_term">Long-term goal</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label>Repeat</label>
+        <select id="modal-recurrence">
+          <option value="none">Does not repeat</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="every_weekday">Every weekday (Mon–Fri)</option>
+          <option value="monthly_last">Monthly on the last day</option>
+          <option value="annual">Annually</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+      <div id="weekday-picker" class="weekday-picker"></div>
+      <div id="custom-recur-row" class="field-row custom-recur-row">
+        <label>Every</label>
+        <input type="number" id="modal-custom-interval" min="1" value="1" style="width:56px">
+        <select id="modal-custom-unit">
+          <option value="day">day(s)</option>
+          <option value="week" selected>week(s)</option>
+          <option value="month">month(s)</option>
+        </select>
+        <label style="margin-left:12px">Until</label>
+        <input type="date" id="modal-recur-until">
+      </div>
+      <div class="field-row">
+        <label>Notify</label>
+        <div id="notif-options" class="notif-options"></div>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button id="modal-delete" class="btn btn-danger">Delete</button>
+      <div class="spacer"></div>
+      <button id="modal-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="modal-save" class="btn btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div id="settings-modal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Settings</h2>
+      <button id="settings-close" class="btn btn-icon">✕</button>
+    </div>
+    <div class="modal-body">
+      <h3 class="section-title">GitHub sync</h3>
+      <p class="hint">Your schedule is stored as a JSON file in a repo you control. Create a personal access token (Settings → Developer settings → Fine-grained tokens) with read/write access to that one repo's contents.</p>
+      <div class="field-row"><label>Repo owner</label><input id="cfg-owner" placeholder="your-username"></div>
+      <div class="field-row"><label>Repo name</label><input id="cfg-repo" placeholder="my-calendar-data"></div>
+      <div class="field-row"><label>File path</label><input id="cfg-path" placeholder="calendar-data.json"></div>
+      <div class="field-row"><label>Branch</label><input id="cfg-branch" placeholder="main"></div>
+      <div class="field-row"><label>Access token</label><input id="cfg-token" type="password" placeholder="ghp_..."></div>
+      <div class="modal-foot" style="padding-left:0">
+        <div class="spacer"></div>
+        <button id="cfg-save" class="btn btn-primary">Save & sync</button>
+      </div>
+
+      <h3 class="section-title">Working hours for a date</h3>
+      <p class="hint">Overrides the default 9AM–9PM window for one specific date. The rescheduler treats this as a hard boundary for that date.</p>
+      <div class="field-row"><label>Date</label><input type="date" id="wh-date"></div>
+      <div class="field-row"><label>From</label><input type="time" id="wh-start"> <span class="dash">–</span> <input type="time" id="wh-end"></div>
+      <div class="modal-foot" style="padding-left:0">
+        <button id="wh-clear" class="btn btn-ghost">Reset to default</button>
+        <div class="spacer"></div>
+        <button id="wh-save" class="btn btn-primary">Save hours</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/model.js"></script>
+<script src="js/scheduler.js"></script>
+<script src="js/store.js"></script>
+<script src="js/notifications.js"></script>
+<script src="js/calendar.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

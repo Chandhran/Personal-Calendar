@@ -1,0 +1,12 @@
+{
+  "name": "Blueprint — Schedule",
+  "short_name": "Blueprint",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#0E1A24",
+  "theme_color": "#0E1A24",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
