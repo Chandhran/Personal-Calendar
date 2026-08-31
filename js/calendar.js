@@ -240,7 +240,14 @@ const CalendarView = (() => {
       History.record();
       window.Store.updateTask(task.id, { missed: true, completed: false });
       Scheduler.rescheduleMissed(window.Store, task.id, task.date);
-      render();
+      const moved = window.Store.getTask(task.id);
+      if (moved && moved.date !== task.date) {
+        // It landed on a different day — jump the view there so it doesn't
+        // just disappear off-screen with no indication of where it went.
+        setAnchor(moved.date);
+      } else {
+        render();
+      }
       flashTask(task.id);
     });
 
