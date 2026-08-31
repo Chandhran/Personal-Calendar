@@ -74,6 +74,26 @@
     return [...document.querySelectorAll('#notif-options input:checked')].map(i => Number(i.value));
   }
 
+  // ---------- Recurring-task edit scope (this occurrence vs. following) ----------
+  function promptRecurrenceScope(task, onChoice) {
+    if (!task.recurrenceId) { onChoice('this'); return; }
+    const modal = $('#scope-modal');
+    modal.classList.add('open');
+    function cleanup() {
+      modal.classList.remove('open');
+      $('#scope-this').removeEventListener('click', chooseThis);
+      $('#scope-following').removeEventListener('click', chooseFollowing);
+      $('#scope-cancel').removeEventListener('click', chooseCancel);
+    }
+    function chooseThis() { cleanup(); onChoice('this'); }
+    function chooseFollowing() { cleanup(); onChoice('following'); }
+    function chooseCancel() { cleanup(); onChoice(null); }
+    $('#scope-this').addEventListener('click', chooseThis);
+    $('#scope-following').addEventListener('click', chooseFollowing);
+    $('#scope-cancel').addEventListener('click', chooseCancel);
+  }
+  window.promptRecurrenceScope = promptRecurrenceScope;
+
   function saveFromModal() {
     const title = $('#modal-title-input').value.trim() || 'Untitled task';
     const date = $('#modal-date').value;
@@ -97,25 +117,42 @@
       until: $('#modal-recur-until').value || undefined
     };
 
-    History.record();
+    const applyEdit = (scope) => {
+      if (scope === null) return; // cancelled — nothing to do
+      History.record();
+      if (editingId) {
+        if (scope === 'following') {
+          const edits = { title, startTime, endTime, deadline, priority, notifications };
+          const newMaster = window.Store.splitSeriesFrom(editingId, edits);
+          if (newMaster) {
+            const [rs, re] = CalendarView.rangeForView();
+            window.Store.ensureRecurringInstances(rs, re);
+          }
+        } else {
+          window.Store.updateTask(editingId, { title, date, startTime, endTime, deadline, priority, notifications });
+          Scheduler.placeTask(window.Store, editingId, date, startTime, endTime);
+        }
+      } else if (recType !== 'none') {
+        const recurrenceId = uid();
+        const master = newTask({ title, date, startTime, endTime, deadline, priority, notifications, recurrence, recurrenceId });
+        window.Store.addMaster(master);
+        const [rs, re] = CalendarView.rangeForView();
+        window.Store.ensureRecurringInstances(rs, re);
+      } else {
+        const task = newTask({ title, date, startTime, endTime, deadline, priority, notifications });
+        window.Store.addTask(task);
+        Scheduler.placeTask(window.Store, task.id, date, startTime, endTime);
+      }
+      closeTaskModal();
+      CalendarView.render();
+    };
 
-    if (editingId) {
-      window.Store.updateTask(editingId, { title, date, startTime, endTime, deadline, priority, notifications });
-      Scheduler.placeTask(window.Store, editingId, date, startTime, endTime);
-    } else if (recType !== 'none') {
-      const recurrenceId = uid();
-      const master = newTask({ title, date, startTime, endTime, deadline, priority, notifications, recurrence, recurrenceId });
-      window.Store.addMaster(master);
-      const [rs, re] = CalendarView.rangeForView();
-      window.Store.ensureRecurringInstances(rs, re);
+    const editingTask = editingId ? window.Store.getTask(editingId) : null;
+    if (editingTask && editingTask.recurrenceId) {
+      promptRecurrenceScope(editingTask, applyEdit);
     } else {
-      const task = newTask({ title, date, startTime, endTime, deadline, priority, notifications });
-      window.Store.addTask(task);
-      Scheduler.placeTask(window.Store, task.id, date, startTime, endTime);
+      applyEdit('this');
     }
-
-    closeTaskModal();
-    CalendarView.render();
   }
 
   function deleteFromModal() {

@@ -306,10 +306,22 @@ const CalendarView = (() => {
         if (!taskId) return;
         const task = window.Store.getTask(taskId);
         if (!task) return;
-        History.record();
-        Scheduler.placeTask(window.Store, taskId, cell.dataset.date, task.startTime, task.endTime);
-        onTaskMoved();
-        render();
+        const targetDate = cell.dataset.date;
+        window.promptRecurrenceScope(task, (scope) => {
+          if (scope === null) return;
+          History.record();
+          if (scope === 'following') {
+            const newMaster = window.Store.splitSeriesFrom(taskId, {});
+            if (newMaster) {
+              newMaster.date = targetDate;
+              window.Store.ensureRecurringInstances(...rangeForView());
+            }
+          } else {
+            Scheduler.placeTask(window.Store, taskId, targetDate, task.startTime, task.endTime);
+          }
+          onTaskMoved();
+          render();
+        });
       });
       cell.addEventListener('dblclick', () => {
         onSlotCreate(cell.dataset.date, '09:00', '10:00');
@@ -493,11 +505,24 @@ const CalendarView = (() => {
         const snappedMin = snapMinutesFromPx(relY);
         const newStart = minutesToTime(snappedMin);
         const newEnd = minutesToTime(snappedMin + dur);
+        const targetDate = targetCol.dataset.date;
 
-        History.record();
-        Scheduler.placeTask(window.Store, task.id, targetCol.dataset.date, newStart, newEnd);
-        onTaskMoved();
-        render();
+        window.promptRecurrenceScope(task, (scope) => {
+          if (scope === null) { render(); return; }
+          History.record();
+          if (scope === 'following') {
+            const newMaster = window.Store.splitSeriesFrom(task.id, { startTime: newStart, endTime: newEnd });
+            if (newMaster) {
+              newMaster.date = targetDate;
+              const [rs, re] = rangeForView();
+              window.Store.ensureRecurringInstances(rs, re);
+            }
+          } else {
+            Scheduler.placeTask(window.Store, task.id, targetDate, newStart, newEnd);
+          }
+          onTaskMoved();
+          render();
+        });
       },
       onCancel() {
         ghost.remove();
@@ -533,10 +558,22 @@ const CalendarView = (() => {
         const heightPx = parseFloat(el.style.height);
         const durMin = Math.max(SNAP_MIN, snapMinutesFromPx(heightPx));
         const newEnd = minutesToTime(timeToMinutes(task.startTime) + durMin);
-        History.record();
-        Scheduler.placeTask(window.Store, task.id, task.date, task.startTime, newEnd);
-        onTaskMoved();
-        render();
+
+        window.promptRecurrenceScope(task, (scope) => {
+          if (scope === null) { render(); return; }
+          History.record();
+          if (scope === 'following') {
+            const newMaster = window.Store.splitSeriesFrom(task.id, { endTime: newEnd });
+            if (newMaster) {
+              const [rs, re] = rangeForView();
+              window.Store.ensureRecurringInstances(rs, re);
+            }
+          } else {
+            Scheduler.placeTask(window.Store, task.id, task.date, task.startTime, newEnd);
+          }
+          onTaskMoved();
+          render();
+        });
       },
       onCancel() {
         el.classList.remove('is-dragging');

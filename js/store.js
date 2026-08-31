@@ -169,13 +169,20 @@ const Store = (() => {
     for (const master of state.masters) {
       const dates = window.Model.expandRecurrence(master, rangeStart, rangeEnd);
       for (const d of dates) {
-        const already = state.tasks.some(t => t.recurrenceId === master.recurrenceId && t.date === d);
+        // Match on originalDate (the date this occurrence was generated
+        // for), not the current .date field — the reflow engine can move an
+        // instance to a different day when it needs to reschedule it, and
+        // matching on .date would then see day `d` as "missing" and
+        // generate a duplicate, leaving the moved instance behind as a
+        // second copy.
+        const already = state.tasks.some(t => t.recurrenceId === master.recurrenceId && (t.originalDate || t.date) === d);
         if (!already) {
           const dur = window.Model.durationMinutes(master);
           state.tasks.push(window.Model.newTask({
             ...master,
             id: window.Model.uid(),
             date: d,
+            originalDate: d,
             endTime: window.Model.minutesToTime(window.Model.timeToMinutes(master.startTime) + dur),
             recurrence: { type: 'none' }, // instances themselves don't recurse
             recurrenceId: master.recurrenceId
@@ -183,6 +190,41 @@ const Store = (() => {
         }
       }
     }
+  }
+
+  // Split a recurring series at `instanceId`: the old series stops the day
+  // before this occurrence, and a new series starts here with `edits`
+  // applied, continuing the same recurrence pattern. Used for "this and
+  // following events" edits.
+  function splitSeriesFrom(instanceId, edits) {
+    const inst = getTask(instanceId);
+    if (!inst || !inst.recurrenceId) return null;
+    const oldRecId = inst.recurrenceId;
+    const splitDate = inst.originalDate || inst.date;
+    const oldMaster = state.masters.find(m => m.recurrenceId === oldRecId);
+
+    if (oldMaster) {
+      oldMaster.recurrence = { ...oldMaster.recurrence, until: window.Model.addDays(splitDate, -1) };
+    }
+    // Drop every materialized instance of the OLD series from the split
+    // point on (including the one being edited) — the new series replaces
+    // them going forward.
+    state.tasks = state.tasks.filter(t => !(t.recurrenceId === oldRecId && (t.originalDate || t.date) >= splitDate));
+
+    const newRecId = window.Model.uid();
+    const pattern = oldMaster ? { ...oldMaster.recurrence } : { type: 'none' };
+    delete pattern.until;
+    const newMaster = window.Model.newTask({
+      title: inst.title, priority: inst.priority, deadline: inst.deadline, notifications: inst.notifications,
+      startTime: inst.startTime, endTime: inst.endTime,
+      ...edits,
+      date: splitDate,
+      recurrence: pattern,
+      recurrenceId: newRecId
+    });
+    state.masters.push(newMaster);
+    markDirty();
+    return newMaster;
   }
 
   // --- undo support ---
@@ -204,7 +246,7 @@ const Store = (() => {
     getTask, getTasksOnDate, getTasksInRange,
     addTask, addMaster, getMasters, updateTask, removeTask, removeSeries,
     setWorkingHours, getWorkingHours,
-    ensureRecurringInstances,
+    ensureRecurringInstances, splitSeriesFrom,
     getSnapshot, restoreSnapshot,
     markDirty
   };
