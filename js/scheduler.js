@@ -74,7 +74,7 @@ const Scheduler = (() => {
 
     while (pending.length && hops++ < 60) {
       const existing = store.getTasksOnDate(currentDate)
-        .filter(t => !pending.some(p => p.id === t.id));
+        .filter(t => !t.completed && !pending.some(p => p.id === t.id));
       const { placed, overflow } = layoutDay(store, currentDate, [...existing, ...pending]);
       allPlaced.push(...placed);
       touched.add(currentDate);
@@ -82,6 +82,7 @@ const Scheduler = (() => {
       pending = overflow;
       currentDate = addDays(currentDate, 1);
     }
+    store.markDirty();
     return { touched: [...touched], placed: allPlaced, strandedCount: pending.length };
   }
 
@@ -96,7 +97,7 @@ const Scheduler = (() => {
     task.endTime = endTime;
     task.manuallyPlaced = true;
 
-    const others = store.getTasksOnDate(dateStr).filter(t => t.id !== taskId);
+    const others = store.getTasksOnDate(dateStr).filter(t => t.id !== taskId && !t.completed);
     return cascade(store, dateStr, [task, ...others]);
   }
 
@@ -113,7 +114,7 @@ const Scheduler = (() => {
     // layoutDay will push it forward if occupied by higher-rank tasks.
     task.endTime = minutesToTime(timeToMinutes(task.startTime) + dur);
 
-    const others = store.getTasksOnDate(fromDate).filter(t => t.id !== taskId);
+    const others = store.getTasksOnDate(fromDate).filter(t => t.id !== taskId && !t.completed);
     return cascade(store, fromDate, [task, ...others]);
   }
 

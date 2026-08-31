@@ -97,6 +97,8 @@
       until: $('#modal-recur-until').value || undefined
     };
 
+    History.record();
+
     if (editingId) {
       window.Store.updateTask(editingId, { title, date, startTime, endTime, deadline, priority, notifications });
       Scheduler.placeTask(window.Store, editingId, date, startTime, endTime);
@@ -118,6 +120,7 @@
 
   function deleteFromModal() {
     if (!editingId) return;
+    History.record();
     const t = window.Store.getTask(editingId);
     if (t && t.recurrenceId && confirm('Delete the entire recurring series? Cancel to delete just this one.')) {
       window.Store.removeSeries(t.recurrenceId);
@@ -169,12 +172,14 @@
     const date = $('#wh-date').value;
     const start = $('#wh-start').value;
     const end = $('#wh-end').value;
+    History.record();
     window.Store.setWorkingHours(date, { start, end });
     CalendarView.render();
   }
 
   function clearWorkingHours() {
     const date = $('#wh-date').value;
+    History.record();
     window.Store.setWorkingHours(date, null);
     CalendarView.render();
   }
@@ -194,6 +199,20 @@
     $('#view-select').addEventListener('change', (e) => CalendarView.setView(e.target.value));
     $('#btn-add-task').addEventListener('click', () => openTaskModal({ date: CalendarView.getAnchor() }));
     $('#btn-settings').addEventListener('click', openSettings);
+    $('#btn-undo').addEventListener('click', doUndo);
+    window.addEventListener('keydown', (e) => {
+      const isUndoKey = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z';
+      if (isUndoKey && !document.querySelector('.modal-overlay.open')) {
+        e.preventDefault();
+        doUndo();
+      }
+    });
+  }
+
+  function doUndo() {
+    if (!History.canUndo()) return;
+    History.undo();
+    CalendarView.render();
   }
 
   function wireTaskModal() {

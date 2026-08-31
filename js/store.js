@@ -124,7 +124,7 @@ const Store = (() => {
     return state.tasks.find(t => t.id === id);
   }
   function getTasksOnDate(dateStr) {
-    return state.tasks.filter(t => t.date === dateStr && !t.completed);
+    return state.tasks.filter(t => t.date === dateStr);
   }
   function getTasksInRange(startStr, endStr) {
     return state.tasks.filter(t => t.date >= startStr && t.date <= endStr);
@@ -185,6 +185,17 @@ const Store = (() => {
     }
   }
 
+  // --- undo support ---
+  function getSnapshot() {
+    return JSON.parse(JSON.stringify({ tasks: state.tasks, masters: state.masters, workingHours: state.workingHours }));
+  }
+  function restoreSnapshot(snap) {
+    state.tasks = snap.tasks;
+    state.masters = snap.masters;
+    state.workingHours = snap.workingHours;
+    markDirty();
+  }
+
   loadLocal();
 
   return {
@@ -194,6 +205,7 @@ const Store = (() => {
     addTask, addMaster, getMasters, updateTask, removeTask, removeSeries,
     setWorkingHours, getWorkingHours,
     ensureRecurringInstances,
+    getSnapshot, restoreSnapshot,
     markDirty
   };
 })();

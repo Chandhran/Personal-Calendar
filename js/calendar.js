@@ -1,19 +1,31 @@
 // calendar.js — grid rendering for day/week/month, pointer-based drag-create,
-// drag-move, and resize. All times snap to 15-minute increments.
+// drag-move (via a floating ghost that sticks to the cursor), and resize.
+// All times snap to 15-minute increments.
 
 const CalendarView = (() => {
-  const { toDateStr, fromDateStr, addDays, timeToMinutes, minutesToTime, pad2 } = window.Model;
+  const { toDateStr, fromDateStr, addDays, timeToMinutes, minutesToTime } = window.Model;
 
   const HOUR_PX = 56;
   const SNAP_MIN = 15;
-  const DAY_START_MIN = 0;
   const DAY_END_MIN = 24 * 60;
+  const CLICK_THRESHOLD_PX = 4;
 
   let view = 'week';           // 'day' | 'week' | 'month'
   let anchorDate = toDateStr(new Date());
   let onTaskClick = () => {};
   let onSlotCreate = () => {};
   let onTaskMoved = () => {};
+
+  // A single shared drag controller avoids leaking window listeners on
+  // every re-render (each render replaces all task-block elements).
+  let dragState = null;
+  window.addEventListener('mousemove', (e) => { if (dragState) dragState.onMove(e); });
+  window.addEventListener('mouseup', (e) => {
+    if (!dragState) return;
+    const ds = dragState;
+    dragState = null;
+    ds.onUp(e);
+  });
 
   function init(handlers) {
     onTaskClick = handlers.onTaskClick || onTaskClick;
@@ -49,7 +61,6 @@ const CalendarView = (() => {
       const start = weekStart(anchorDate);
       return [start, addDays(start, 6)];
     }
-    // month: full weeks covering the month grid
     const d = fromDateStr(anchorDate);
     const first = new Date(d.getFullYear(), d.getMonth(), 1);
     const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
@@ -58,9 +69,8 @@ const CalendarView = (() => {
     return [toDateStr(gridStart), toDateStr(gridEnd)];
   }
 
-  function priorityColorVar(task) {
-    if (task.deadline) return 'var(--deadline)';
-    return `var(--pri-${task.priority})`;
+  function priorityClass(task) {
+    return 'pri-' + (task.priority || 'not_urgent');
   }
 
   function fmtHeaderLabel() {
@@ -76,7 +86,6 @@ const CalendarView = (() => {
     const root = document.getElementById('calendar-root');
     root.innerHTML = '';
     document.getElementById('range-label').textContent = fmtHeaderLabel();
-    // ensure recurring instances exist for the visible window (+buffer)
     const [rs, re] = rangeForView();
     window.Store.ensureRecurringInstances(addDays(rs, -3), addDays(re, 3));
 
@@ -95,7 +104,6 @@ const CalendarView = (() => {
     grid.className = 'time-grid';
     grid.style.setProperty('--cols', days.length);
 
-    // corner + day headers
     const headerRow = document.createElement('div');
     headerRow.className = 'grid-header-row';
     const corner = document.createElement('div');
@@ -117,7 +125,6 @@ const CalendarView = (() => {
     body.style.setProperty('--cols', days.length);
     body.style.height = `${(DAY_END_MIN / 60) * HOUR_PX}px`;
 
-    // hour labels column
     const hourCol = document.createElement('div');
     hourCol.className = 'hour-col';
     for (let h = 0; h < 24; h++) {
@@ -173,25 +180,16 @@ const CalendarView = (() => {
     const startMin = timeToMinutes(task.startTime);
     const endMin = timeToMinutes(task.endTime);
     const el = document.createElement('div');
-    el.className = 'task-block' + (task.missed ? ' is-missed' : '') + (task.completed ? ' is-completed' : '');
+    el.className = [
+      'task-block',
+      priorityClass(task),
+      task.deadline ? 'has-deadline' : '',
+      task.missed ? 'is-missed' : '',
+      task.completed ? 'is-completed' : ''
+    ].filter(Boolean).join(' ');
     el.style.top = `${(startMin / 60) * HOUR_PX}px`;
-    el.style.height = `${Math.max(20, ((endMin - startMin) / 60) * HOUR_PX)}px`;
-    el.style.borderLeftColor = priorityColorVar(task);
+    el.style.height = `${Math.max(22, ((endMin - startMin) / 60) * HOUR_PX)}px`;
     el.dataset.taskId = task.id;
-
-    const check = document.createElement('input');
-    check.type = 'checkbox';
-    check.className = 'missed-check';
-    check.checked = task.missed;
-    check.title = "Didn't do this — reschedule it";
-    check.addEventListener('click', e => e.stopPropagation());
-    check.addEventListener('change', () => {
-      window.Store.updateTask(task.id, { missed: check.checked });
-      if (check.checked) {
-        Scheduler.rescheduleMissed(window.Store, task.id, task.date);
-      }
-      render();
-    });
 
     const title = document.createElement('div');
     title.className = 'task-title';
@@ -200,19 +198,45 @@ const CalendarView = (() => {
     time.className = 'task-time';
     time.textContent = `${task.startTime} – ${task.endTime}`;
 
-    el.appendChild(check);
+    const actions = document.createElement('div');
+    actions.className = 'task-actions';
+    const tickBtn = document.createElement('button');
+    tickBtn.type = 'button';
+    tickBtn.className = 'task-btn tick-btn';
+    tickBtn.title = 'Done';
+    tickBtn.textContent = '✓';
+    const xBtn = document.createElement('button');
+    xBtn.type = 'button';
+    xBtn.className = 'task-btn x-btn';
+    xBtn.title = "Didn't do this — reschedule";
+    xBtn.textContent = '✕';
+    actions.appendChild(tickBtn);
+    actions.appendChild(xBtn);
+
+    [tickBtn, xBtn].forEach(b => b.addEventListener('mousedown', e => e.stopPropagation()));
+    tickBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      History.record();
+      window.Store.updateTask(task.id, { completed: true, missed: false });
+      render();
+    });
+    xBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      History.record();
+      window.Store.updateTask(task.id, { missed: true, completed: false });
+      Scheduler.rescheduleMissed(window.Store, task.id, task.date);
+      render();
+    });
+
     el.appendChild(title);
     el.appendChild(time);
+    el.appendChild(actions);
 
     const handle = document.createElement('div');
     handle.className = 'resize-handle';
     el.appendChild(handle);
 
-    attachTaskDrag(el, task, handle);
-    el.addEventListener('click', (e) => {
-      if (e.target === check || e.target === handle) return;
-      onTaskClick(task.id);
-    });
+    attachTaskPointer(el, task, handle);
 
     return el;
   }
@@ -247,8 +271,7 @@ const CalendarView = (() => {
       list.className = 'month-tasklist';
       window.Store.getTasksOnDate(cur).slice(0, 4).forEach(task => {
         const chip = document.createElement('div');
-        chip.className = 'month-chip' + (task.missed ? ' is-missed' : '');
-        chip.style.borderLeftColor = priorityColorVar(task);
+        chip.className = 'month-chip ' + priorityClass(task) + (task.missed ? ' is-missed' : '') + (task.completed ? ' is-completed' : '');
         chip.textContent = `${task.startTime} ${task.title || 'Untitled'}`;
         chip.dataset.taskId = task.id;
         chip.draggable = true;
@@ -267,6 +290,7 @@ const CalendarView = (() => {
         if (!taskId) return;
         const task = window.Store.getTask(taskId);
         if (!task) return;
+        History.record();
         Scheduler.placeTask(window.Store, taskId, cell.dataset.date, task.startTime, task.endTime);
         onTaskMoved();
         render();
@@ -283,20 +307,8 @@ const CalendarView = (() => {
 
   // ---------- Pointer interactions: create by drag ----------
   function attachSlotCreation(col, dateStr) {
-    let dragging = false;
-    let startY = 0;
     let ghost = null;
-
-    col.addEventListener('mousedown', (e) => {
-      if (e.target !== col) return; // ignore clicks on children (tasks etc.)
-      dragging = true;
-      startY = e.offsetY;
-      ghost = document.createElement('div');
-      ghost.className = 'create-ghost';
-      col.appendChild(ghost);
-      updateGhost(startY, startY);
-      e.preventDefault();
-    });
+    let startY = 0;
 
     function updateGhost(y1, y2) {
       const top = Math.min(y1, y2);
@@ -304,110 +316,150 @@ const CalendarView = (() => {
       ghost.style.top = `${top}px`;
       ghost.style.height = `${height}px`;
     }
-
     function yToMinutes(y) {
-      const raw = (y / HOUR_PX) * 60;
-      return Math.round(raw / SNAP_MIN) * SNAP_MIN;
+      return Math.round((y / HOUR_PX) * 60 / SNAP_MIN) * SNAP_MIN;
     }
 
-    function onMove(e) {
-      if (!dragging) return;
-      const rect = col.getBoundingClientRect();
-      const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
-      updateGhost(startY, y);
-    }
-    function onUp(e) {
-      if (!dragging) return;
-      dragging = false;
-      const rect = col.getBoundingClientRect();
-      const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
-      let m1 = yToMinutes(startY);
-      let m2 = yToMinutes(y);
-      if (m2 < m1) [m1, m2] = [m2, m1];
-      if (m2 - m1 < SNAP_MIN) m2 = m1 + 60; // treat a plain click as a 1-hour default
-      ghost.remove();
-      onSlotCreate(dateStr, minutesToTime(m1), minutesToTime(m2));
-    }
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    col.addEventListener('mousedown', (e) => {
+      if (e.target !== col) return; // ignore clicks on children (tasks etc.)
+      startY = e.offsetY;
+      ghost = document.createElement('div');
+      ghost.className = 'create-ghost';
+      col.appendChild(ghost);
+      updateGhost(startY, startY);
+      e.preventDefault();
+
+      dragState = {
+        onMove(ev) {
+          const rect = col.getBoundingClientRect();
+          const y = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
+          updateGhost(startY, y);
+        },
+        onUp(ev) {
+          const rect = col.getBoundingClientRect();
+          const y = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
+          let m1 = yToMinutes(startY);
+          let m2 = yToMinutes(y);
+          if (m2 < m1) [m1, m2] = [m2, m1];
+          if (m2 - m1 < SNAP_MIN) m2 = m1 + 60; // a plain click defaults to a 1-hour task
+          ghost.remove();
+          onSlotCreate(dateStr, minutesToTime(m1), minutesToTime(m2));
+        }
+      };
+    });
   }
 
-  // ---------- Pointer interactions: move / resize existing task ----------
-  function attachTaskDrag(el, task, handle) {
-    let mode = null; // 'move' | 'resize'
-    let startY = 0, startTop = 0, startHeight = 0;
-    let col = null;
+  // ---------- Pointer interactions: move (floating ghost) / resize ----------
+  function snapMinutesFromPx(px) {
+    return Math.max(0, Math.round((px / HOUR_PX) * 60 / SNAP_MIN) * SNAP_MIN);
+  }
 
-    function beginMove(e) {
-      mode = 'move';
-      col = el.parentElement;
-      startY = e.clientY;
-      startTop = parseFloat(el.style.top);
-      el.classList.add('is-dragging');
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    function beginResize(e) {
-      mode = 'resize';
-      col = el.parentElement;
-      startY = e.clientY;
-      startHeight = parseFloat(el.style.height);
-      el.classList.add('is-dragging');
-      e.preventDefault();
-      e.stopPropagation();
-    }
+  function attachTaskPointer(el, task, handle) {
     el.addEventListener('mousedown', (e) => {
-      if (e.target === handle) beginResize(e);
-      else if (e.target.tagName !== 'INPUT') beginMove(e);
+      if (e.target.closest('.tick-btn') || e.target.closest('.x-btn')) return;
+      const isResize = e.target === handle;
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (isResize) beginResize(e, el, task);
+      else beginMove(e, el, task);
     });
+  }
 
-    function snap(px) { return Math.round((px / HOUR_PX) * 60 / SNAP_MIN) * SNAP_MIN; }
+  function beginResize(e, el, task) {
+    const startClientY = e.clientY;
+    const startHeight = parseFloat(el.style.height);
+    el.classList.add('is-dragging');
 
-    function onMove(e) {
-      if (!mode) return;
-      const dy = e.clientY - startY;
-      if (mode === 'move') {
-        el.style.top = `${Math.max(0, startTop + dy)}px`;
-        // allow dragging across columns: reparent ghost visually via cursor tracking
-        const target = document.elementFromPoint(e.clientX, e.clientY);
-        const targetCol = target && target.closest('.day-col');
-        if (targetCol && targetCol !== col) {
-          col._dragTargetOverride = targetCol;
-        } else if (targetCol === col) {
-          col._dragTargetOverride = null;
+    dragState = {
+      onMove(ev) {
+        const dy = ev.clientY - startClientY;
+        const rawHeight = Math.max(20, startHeight + dy);
+        const snappedMin = Math.max(SNAP_MIN, snapMinutesFromPx(rawHeight));
+        el.style.height = `${(snappedMin / 60) * HOUR_PX}px`;
+      },
+      onUp(ev) {
+        el.classList.remove('is-dragging');
+        const moved = Math.abs(ev.clientY - startClientY);
+        if (moved < CLICK_THRESHOLD_PX) {
+          onTaskClick(task.id);
+          return;
         }
-      } else {
-        el.style.height = `${Math.max(20, startHeight + dy)}px`;
-      }
-    }
-
-    function onUp(e) {
-      if (!mode) return;
-      const wasMode = mode;
-      mode = null;
-      el.classList.remove('is-dragging');
-      const targetCol = col._dragTargetOverride || col;
-      col._dragTargetOverride = null;
-
-      if (wasMode === 'move') {
-        const topPx = parseFloat(el.style.top);
-        const startMin = snap((topPx / HOUR_PX) * 60);
-        const dur = timeToMinutes(task.endTime) - timeToMinutes(task.startTime);
-        const newStart = minutesToTime(startMin);
-        const newEnd = minutesToTime(startMin + dur);
-        Scheduler.placeTask(window.Store, task.id, targetCol.dataset.date, newStart, newEnd);
-      } else {
         const heightPx = parseFloat(el.style.height);
-        const durMin = Math.max(SNAP_MIN, snap((heightPx / HOUR_PX) * 60));
+        const durMin = Math.max(SNAP_MIN, snapMinutesFromPx(heightPx));
         const newEnd = minutesToTime(timeToMinutes(task.startTime) + durMin);
+        History.record();
         Scheduler.placeTask(window.Store, task.id, task.date, task.startTime, newEnd);
+        onTaskMoved();
+        render();
       }
-      onTaskMoved();
-      render();
-    }
+    };
+  }
 
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+  function beginMove(e, el, task) {
+    const rect = el.getBoundingClientRect();
+    const grabOffsetX = e.clientX - rect.left;
+    const grabOffsetY = e.clientY - rect.top;
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
+
+    const ghost = el.cloneNode(true);
+    ghost.classList.add('drag-ghost-el');
+    ghost.style.position = 'fixed';
+    ghost.style.left = `${rect.left}px`;
+    ghost.style.top = `${rect.top}px`;
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    ghost.style.margin = '0';
+    ghost.style.pointerEvents = 'none';
+    document.body.appendChild(ghost);
+    el.classList.add('is-dragging-source');
+
+    let lastTargetCol = el.parentElement;
+    const timeBadge = ghost.querySelector('.task-time');
+    const dur = timeToMinutes(task.endTime) - timeToMinutes(task.startTime);
+
+    dragState = {
+      onMove(ev) {
+        ghost.style.left = `${ev.clientX - grabOffsetX}px`;
+        ghost.style.top = `${ev.clientY - grabOffsetY}px`;
+
+        const under = document.elementFromPoint(ev.clientX, ev.clientY);
+        const targetCol = under && under.closest('.day-col');
+        if (targetCol) {
+          lastTargetCol = targetCol;
+          const colRect = targetCol.getBoundingClientRect();
+          const relY = (ev.clientY - grabOffsetY) - colRect.top;
+          const snappedMin = snapMinutesFromPx(relY);
+          if (timeBadge) timeBadge.textContent = `${minutesToTime(snappedMin)} – ${minutesToTime(snappedMin + dur)}`;
+        }
+      },
+      onUp(ev) {
+        ghost.remove();
+        el.classList.remove('is-dragging-source');
+
+        const moved = Math.hypot(ev.clientX - startClientX, ev.clientY - startClientY);
+        if (moved < CLICK_THRESHOLD_PX) {
+          onTaskClick(task.id);
+          return;
+        }
+
+        const under = document.elementFromPoint(ev.clientX, ev.clientY);
+        const targetCol = (under && under.closest('.day-col')) || lastTargetCol;
+        if (!targetCol) { render(); return; }
+
+        const colRect = targetCol.getBoundingClientRect();
+        const relY = (ev.clientY - grabOffsetY) - colRect.top;
+        const snappedMin = snapMinutesFromPx(relY);
+        const newStart = minutesToTime(snappedMin);
+        const newEnd = minutesToTime(snappedMin + dur);
+
+        History.record();
+        Scheduler.placeTask(window.Store, task.id, targetCol.dataset.date, newStart, newEnd);
+        onTaskMoved();
+        render();
+      }
+    };
   }
 
   return { init, render, setView, getView, setAnchor, getAnchor, shift, rangeForView };
